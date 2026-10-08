@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tradebot Dashboard</title>
+<style>
+:root{--bg:#0f1419;--card:#18202a;--fg:#e6edf3;--mut:#8b98a5;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;--line:#2a3441}
+@media(prefers-color-scheme:light){:root{--bg:#f6f8fa;--card:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--acc:#0969da}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+header{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+main{padding:16px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto}
+.card.wide{grid-column:1/-1}h2{font-size:14px;margin:0 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.pill{padding:2px 8px;border-radius:99px;font-weight:600;font-size:12px;border:1px solid var(--line)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.banner{padding:8px 12px;border-radius:6px;margin-bottom:8px;border:1px solid var(--warn);color:var(--warn)}
+.banner.bad{border-color:var(--bad);color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600}button,select,input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;font:inherit}
+button{cursor:pointer}button:hover{border-color:var(--acc)}button.danger{border-color:var(--bad);color:var(--bad)}
+svg{width:100%;height:auto;display:block}.mut{color:var(--mut)}.sim{font-size:11px;padding:1px 6px;border:1px solid var(--warn);color:var(--warn);border-radius:4px}
+small{color:var(--mut)}pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px}
+</style></head><body>
+<header>
+ <b>Tradebot</b><span id="mode" class="pill"></span><span id="kill" class="pill"></span>
+ <span id="conn" class="pill"></span><span id="age" class="mut"></span>
+ <span style="flex:1"></span>
+ <button onclick="setToken()">Token</button>
+ <button onclick="post('/api/cycle').then(load)">Zyklus jetzt</button>
+ <button id="killbtn" class="danger" onclick="toggleKill()"></button>
+</header>
+<main>
+ <div class="card wide" id="banners"></div>
+ <div class="card"><h2>Betrieb &amp; Verbindung</h2><div id="ops"></div></div>
+ <div class="card"><h2>Paper-Portfolio <span class="sim">SIMULIERT</span></h2><div id="paper"></div></div>
+ <div class="card"><h2>Live-Konto (Scalable, nur lesend)</h2><div id="live"></div></div>
+ <div class="card wide"><h2>Kurs &amp; Indikatoren</h2>
+  <select id="sym" onchange="chart()"></select> <small id="dq"></small>
+  <div id="c1"></div><div id="c2"></div><div id="c3"></div><div id="newsbox"></div></div>
+ <div class="card wide"><h2>Signale &amp; Begründungen (deterministisch, unvalidierte Strategie)</h2><div id="sig"></div></div>
+ <div class="card wide"><h2>Ausstehende Ordervorschläge (LIVE_APPROVAL) – keine Broker-Orders</h2><div id="prop"></div></div>
+ <div class="card wide"><h2>Paper-Trades <span class="sim">SIMULIERT</span></h2><div id="trades"></div></div>
+ <div class="card wide"><h2>Backtest</h2>
+  <button onclick="runBt(false)">Backtest (Konfig-Parameter)</button> <button onclick="runBt(true)">mit Optimierung nur auf Trainingsdaten</button>
+  <div id="bt"></div></div>
+ <div class="card wide"><h2>Protokoll</h2><div id="ev"></div></div>
+</main>
+<script>
+const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const f2=x=>x==null?'–':Number(x).toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2}), pc=x=>x==null?'–':(x*100).toFixed(1)+' %';
+let S=null;
+const tok=()=>sessionStorage.getItem('tok')||'';
+function setToken(){const t=prompt('Dashboard-Token (Datei data/secrets/dashboard_token):');if(t!=null)sessionStorage.setItem('tok',t.trim())}
+async function get(u){const r=await fetch(u);return r.json()}
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-Dashboard-Token':tok()},body:JSON.stringify(b||{})});
+  const j=await r.json().catch(()=>({}));if(!r.ok){alert((j.detail||r.statusText));if(r.status==401)setToken();throw 0}return j}
+async function toggleKill(){await post('/api/kill',{on:!S.kill_switch});load()}
+function table(cols,rows,fn){return '<table><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+rows.map(fn).join('')+'</table>'}
+async function load(){
+ S=await get('/api/status');
+ $('mode').textContent='Modus: '+S.mode;$('mode').className='pill '+(S.mode=='PAPER'?'ok':'warn');
+ $('kill').textContent=S.kill_switch?'STOPP AKTIV':'Stopp aus';$('kill').className='pill '+(S.kill_switch?'bad':'ok');
+ $('killbtn').textContent=S.kill_switch?'Stoppschalter aufheben':'STOPPSCHALTER';
+ const m=S.mcp,ms=m.status;
+ $('conn').textContent='Scalable-MCP: '+(ms?(ms.ok?'erreichbar':'Fehler'):(m.token_present?'nicht geprüft':'nicht angemeldet'));
+ $('conn').className='pill '+(ms&&ms.ok?'ok':'warn');
+ const ages=Object.values(S.data).filter(Boolean).map(d=>d.age_bdays);
+ $('age').textContent='Datenalter: '+(ages.length?Math.max(...ages)+' Handelstage':'keine Daten')+' ('+S.provider+')';
+ let b='';
+ if(S.synthetic_data)b+='<div class="banner bad">SYNTHETISCHE DEMO-DATEN – keinerlei Marktbezug. Nur zum Ausprobieren der Funktionen.</div>';
+ if(S.kill_switch)b+='<div class="banner bad">Stoppschalter aktiv: keine neuen Orders/Vorschläge/Simulations-Fills. Offene Orders siehe unten.</div>';
+ b+='<div class="banner">'+esc(S.strategy_disclaimer)+' Verlustgrenzen/Stopps werden nur bei Bot-Läufen auf Schlusskursbasis geprüft; sie sind keine Broker-Stop-Orders und garantieren keinen begrenzten Verlust.</div>';
+ $('banners').innerHTML=b;
+ const tools=Object.entries(m.tools||{});
+ $('ops').innerHTML=`<p>Modus: <b>${S.mode}</b> <select id="msel"><option>PAPER</option><option>LIVE_APPROVAL</option></select> <button onclick="post('/api/mode',{mode:$('msel').value}).then(load)">wechseln</button></p>
+ <p class="mut">LIVE_APPROVAL gesperrt bis: ${S.live_missing.length?esc(S.live_missing.join(', ')):'<span class=ok>alles konfiguriert</span>'}</p>
+ <p>MCP-URL: ${esc(m.url)}<br>Token vorhanden: ${m.token_present?'ja':'nein (python -m tradebot mcp-login)'}<br>
+ Status: ${ms?(ms.ok?'<span class=ok>OK, '+ms.n_tools+' Tools</span>':'<span class=bad>'+esc(ms.error)+'</span>'):'nie geprüft'}</p>
+ <button onclick="post('/api/mcp/discover').then(load)">Tools entdecken</button> <button onclick="post('/api/mcp/snapshot').then(load)">Depot lesen</button>
+ ${tools.length?'<p class=mut>'+tools.map(([n,c])=>esc(n)+' ['+c+']').join('<br>')+'</p>':''}
+ <p class="warn">${esc(m.note)}</p>
+ <p class=mut>Letzter Zyklus: ${S.last_cycle?esc(S.last_cycle.ts):'–'}</p>`;
+ const p=S.paper;
+ $('paper').innerHTML=`<p>Eigenkapital <b>${f2(p.equity)}</b> (Start ${f2(p.initial)}) · Cash ${f2(p.cash)} · reserviert ${f2(p.reserved)} · verfügbar ${f2(p.available)}</p>`+
+  (p.positions.length?table(['Symbol','Menge','Kurs','Wert','Gewicht'],p.positions,r=>`<tr><td>${esc(r.symbol)}</td><td>${r.qty.toFixed(4)}</td><td>${f2(r.price)}</td><td>${f2(r.value)}</td><td>${pc(r.weight)}</td></tr>`):'<p class=mut>Keine Positionen</p>');
+ const l=S.live;
+ $('live').innerHTML=`<p>Budget (Konfig): ${f2(l.budget)} · intern verfügbar ${f2(l.available_internal)} · reserviert ${f2(l.reserved)}</p>
+  <p class=mut>Interner Bestand stammt aus von Ihnen als „extern ausgeführt“ gebuchten Vorschlägen (Näherung). Maßgeblich ist Ihr Scalable-Depot.</p>`+
+  (l.snapshot?`<details><summary>Letzter Broker-Lesezugriff (roh, ${new Date(l.snapshot.ts*1000).toLocaleString()})</summary><pre>${esc(JSON.stringify(l.snapshot.data,null,1))}</pre></details>`:'<p class=mut>Noch kein Broker-Snapshot (Anmeldung + „Depot lesen“).</p>');
+ const oo=S.open_orders;
+ if(S.kill_switch||oo.paper_pending.length||oo.live_proposals.length){$('banners').innerHTML+=`<div class="banner">Offene Orders: ${oo.paper_pending.length} Paper (simuliert), ${oo.live_proposals.length} Live-Vorschläge. ${esc(oo.hinweis)}</div>`}
+ if(!$('sym').options.length){S.symbols.forEach(s=>{const o=document.createElement('option');o.value=o.textContent=s.symbol;$('sym').appendChild(o)});chart()}
+ const [sg,pr,pp,ev]=await Promise.all([get('/api/signals'),get('/api/proposals'),get('/api/paper'),get('/api/events?limit=60')]);
+ $('sig').innerHTML=table(['Zeit','Symbol','Kerze','Aktion','Preis','Alter','Ergebnis','Begründung'],sg,r=>`<tr><td>${esc(r.ts.slice(0,16))}</td><td>${esc(r.symbol)}</td><td>${r.bar_date}</td><td><b>${r.action}</b></td><td>${f2(r.price)}</td><td>${r.data_age_bdays}d</td><td>${esc(r.mode)}/${esc(r.outcome)}</td><td>${r.reasons.map(esc).join('<br>')}</td></tr>`);
+ $('prop').innerHTML=(pr.length?table(['#','Symbol','Seite','Menge','ca. Wert','Status','Begründung','Aktion'],pr,r=>`<tr><td>${r.id}</td><td>${esc(r.symbol)}<br><small>${esc(r.isin)}</small></td><td>${r.side}</td><td>${r.qty}</td><td>${f2(r.est_value)}</td><td>${r.status}${r.note?'<br><small>'+esc(r.note)+'</small>':''}</td><td>${r.reasons.map(esc).join('<br>')}${r.preview?'<details><summary>Broker-Vorschau (unvertrauter Text)</summary><pre>'+esc(r.preview)+'</pre></details>':''}</td>
+  <td>${['PROPOSED'].includes(r.status)&&S.mcp.preview_tool?'<button onclick="post(\'/api/proposals/'+r.id+'/preview\').then(load)">Offizielle Vorschau anfordern</button> ':''}
+  ${['PROPOSED','PREVIEWED','PREVIEW_UNKNOWN'].includes(r.status)?'<button onclick="ex('+r.id+')">Extern ausgeführt buchen</button> ':''}
+  ${['PROPOSED','PREVIEW_PENDING','PREVIEWED','PREVIEW_UNKNOWN'].includes(r.status)?'<button onclick="post(\'/api/proposals/'+r.id+'/discard\').then(load)">Verwerfen</button>':''}</td></tr>`)
+  +`<p class=warn>Freigabeweg: Vorschlag im offiziellen Scalable-Ablauf (Ihr KI-Assistent mit Scalable-Connector bzw. Scalable-App) als Order-Vorschau erzeugen, Details prüfen und dort ausdrücklich bestätigen. Dieses Dashboard bestätigt/platziert nie Orders.</p>`:'<p class=mut>Keine Vorschläge.</p>');
+ $('trades').innerHTML=table(['Kerze','Symbol','Seite','Menge','Preis','Gebühr','Spread+Slippage','Cash','Typ'],pp.trades,r=>`<tr><td>${r.bar_date}</td><td>${esc(r.symbol)}</td><td>${r.side}</td><td>${r.qty.toFixed(4)}</td><td>${f2(r.price)}</td><td>${f2(r.fee)}</td><td>${f2(r.spread_slip_cost)}</td><td>${f2(r.cash_delta)}</td><td><span class=sim>SIMULIERT</span></td></tr>`)+
+   '<h2 style="margin-top:12px">Paper-Orders</h2>'+table(['#','Symbol','Seite','Menge','Status','Signalkerze','Notiz'],pp.orders.slice(0,30),r=>`<tr><td>${r.id}</td><td>${esc(r.symbol)}</td><td>${r.side}</td><td>${r.qty}</td><td>${r.status}</td><td>${r.signal_bar}</td><td>${esc(r.note)}</td></tr>`);
+ $('ev').innerHTML=table(['Zeit','Stufe','Art','Symbol','Meldung'],ev,r=>`<tr><td>${esc(r.ts.slice(0,19))}</td><td class="${r.level=='ERROR'?'bad':r.level=='WARN'?'warn':''}">${r.level}</td><td>${esc(r.kind)}</td><td>${esc(r.symbol||'')}</td><td>${esc(r.message)}</td></tr>`);
+ const bt=await get('/api/backtests'); if(bt.length)showBt(bt[0].result,bt[0].symbol);
+}
+function ex(id){const q=prompt('Tatsächlich ausgeführte Stückzahl (laut Scalable):'),p=q&&prompt('Tatsächlicher Preis je Stück:');if(q&&p)post('/api/proposals/'+id+'/executed',{qty:+q.replace(',','.'),price:+p.replace(',','.')}).then(load)}
+function line(dates,series,opts){ // einfaches SVG-Liniendiagramm
+ const W=900,H=opts.h||200,P=40,all=series.flatMap(s=>s.v).filter(v=>v!=null);if(!all.length)return '';
+ let lo=Math.min(...all),hi=Math.max(...all);if(opts.lo!=null)lo=opts.lo;if(opts.hi!=null)hi=opts.hi;if(hi==lo)hi=lo+1;
+ const n=dates.length,x=i=>P+i*(W-P-6)/Math.max(1,n-1),y=v=>H-18-(v-lo)*(H-26)/(hi-lo);
+ let g=`<text x="2" y="12" fill="currentColor" font-size="11">${esc(opts.t)}</text>`;
+ for(let k=0;k<=3;k++){const v=lo+(hi-lo)*k/3;g+=`<line x1="${P}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="#8884" /><text x="2" y="${y(v)+3}" font-size="10" fill="#888">${v.toFixed(opts.dec??2)}</text>`}
+ (opts.hl||[]).forEach(v=>g+=`<line x1="${P}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="#d29922" stroke-dasharray="4"/>`);
+ series.forEach(s=>{let d='';s.v.forEach((v,i)=>{if(v!=null)d+=(d?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)});g+=`<path d="${d}" fill="none" stroke="${s.c}" stroke-width="${s.w||1.5}"/>`});
+ g+=`<text x="${P}" y="${H-3}" font-size="10" fill="#888">${dates[0]}</text><text x="${W-60}" y="${H-3}" font-size="10" fill="#888">${dates[n-1]}</text>`;
+ g+='<text x="'+(W-250)+'" y="12" font-size="10" fill="#888">'+series.map(s=>s.n).join(' · ')+'</text>';
+ return `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`}
+async function chart(){
+ const s=$('sym').value,d=await get('/api/chart/'+s);if(!d.dates)return;const q=d.series;
+ const rep=S.data[s];$('dq').textContent=rep?`Quelle ${rep.source} · ${rep.bars} Kerzen · letzte ${rep.last_bar} · Lücken: ${rep.gaps.length} · ungültige Zeilen: ${rep.invalid_rows}${rep.fetch_error?' · Abruffehler: '+rep.fetch_error:''}`:'';
+ $('c1').innerHTML=line(d.dates,[{v:q.close,c:'#58a6ff',n:'Close',w:2},{v:q.ema_fast,c:'#3fb950',n:'EMA schnell'},{v:q.sma_slow,c:'#d29922',n:'SMA langsam'}],{t:'Kurs',h:240});
+ $('c2').innerHTML=line(d.dates,[{v:q.rsi,c:'#bc8cff',n:'RSI'}],{t:'RSI',lo:0,hi:100,h:110,hl:[30,70],dec:0})+line(d.dates,[{v:q.macd,c:'#58a6ff',n:'MACD'},{v:q.macd_signal,c:'#f85149',n:'Signal'}],{t:'MACD',h:110});
+ $('c3').innerHTML=line(d.dates,[{v:q.dd.map(v=>v==null?null:v*100),c:'#f85149',n:'Drawdown %'}],{t:'Drawdown vom Hoch (%)',h:110,hi:0})+line(d.dates,[{v:q.vol20.map(v=>v==null?null:v*100),c:'#d29922',n:'Vol. 20T ann. %'}],{t:'Volatilität (%) · letzte Rendite '+pc(q.ret.at(-1))+' · ATR '+(q.atr.at(-1)||0).toFixed(2),h:110});
+ const n=await get('/api/news/'+s);
+ $('newsbox').innerHTML='<h2 style="margin-top:10px">Nachrichten <button onclick="post(\'/api/news/'+s+'/refresh\').then(chart)">laden</button></h2><small>'+esc(n.label)+'</small>'+(n.items.length?table(['Quelle','Titel','Stimmung*'],n.items,r=>`<tr><td>${esc(r.source)}</td><td>${esc(r.title)}</td><td>${r.sentiment}</td></tr>`)+'<small>*grobes Stichwortmaß, nicht aussagekräftig</small>':'<p class=mut>Keine Nachrichten gespeichert.</p>')}
+async function runBt(o){const r=await post('/api/backtest',{symbol:$('sym').value,optimize:o});showBt(r,$('sym').value)}
+function showBt(r,sym){
+ const row=(n,a)=>`<tr><td>${n}</td><td>${a.start} – ${a.end}</td><td>${pc(a.total_return)}</td><td>${pc(a.max_drawdown)}</td><td>${a.orders}</td><td>${f2(a.total_costs)} (Geb. ${f2(a.fees)})</td></tr>`;
+ $('bt').innerHTML=`<p><b>${esc(sym)}</b> · Datenquelle ${esc(r.data_source||'')} · <span class="warn">UNVALIDIERT</span> · Parameter: ${esc(JSON.stringify(r.params))}</p>`+
+ table(['Variante','Zeitraum','Rendite','Max. DD','Orders','Kosten'],[1],()=>row('Train: Strategie',r.train.strategy)+row('Train: Buy&Hold',r.train.buy_hold)+row('<b>Test: Strategie</b>',r.test.strategy)+row('<b>Test: Buy&Hold</b>',r.test.buy_hold))+
+ `<p class=mut>${r.optimization?esc(r.optimization.warning):''}</p>`+
+ line(r.test.strategy.equity_curve.map(x=>x[0]),[{v:r.test.strategy.equity_curve.map(x=>x[1]),c:'#58a6ff',n:'Strategie (Test)'},{v:r.test.buy_hold.equity_curve.map(x=>x[1]),c:'#d29922',n:'Buy&Hold (Test)'}],{t:'Eigenkapital im Testzeitraum',h:200})+
+ `<details><summary>Annahmen &amp; Datenqualität</summary><ul>${r.assumptions.map(a=>'<li>'+esc(a)+'</li>').join('')}</ul><pre>${esc(JSON.stringify(r.data_quality||{},null,1))}</pre></details>`}
+load();setInterval(load,60000);
+</script></body></html>

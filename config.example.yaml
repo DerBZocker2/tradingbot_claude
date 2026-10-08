@@ -1,0 +1,74 @@
+# Kopie anlegen:  cp config.example.yaml config.yaml
+# Diese Datei enthält KEINE Geheimnisse. Tokens liegen separat in data/secrets/ (git-ignoriert).
+
+database: data/tradebot.db
+
+data:
+  provider: yfinance        # yfinance | csv | synthetic (synthetic = reine Demo-Daten, nie für LIVE_APPROVAL)
+  csv_dir: data/csv         # <SYMBOL>.csv mit Spalten date,open,high,low,close,volume
+  history_years: 5
+  max_staleness_bdays: 3    # ältere letzte Kurse => keine Signale/Orders
+
+symbols:
+  - {symbol: SPY,  name: "S&P 500 ETF (Demo)"}
+  - {symbol: QQQ,  name: "Nasdaq-100 ETF (Demo)"}
+  # isin wird für Live-Vorschläge empfohlen: - {symbol: EUNL.DE, isin: IE00B4L5Y983, name: iShares Core MSCI World}
+
+strategy:                   # UNVALIDIERT - Beispielstrategie, kein Anlagehinweis
+  ema_fast: 20
+  sma_slow: 50
+  rsi_period: 14
+  rsi_entry_max: 70
+  atr_period: 14
+  atr_stop_mult: 3.0
+
+costs:
+  fee_fixed: 0.0            # EUR pro Order
+  fee_pct: 0.0005           # 0,05 % vom Ordervolumen
+  fee_min: 0.0
+  spread_pct: 0.0010        # voller Spread; je Seite die Hälfte
+  slippage_pct: 0.0005
+
+risk:
+  max_position_pct: 0.25    # max. Anteil eines Wertpapiers am Konto
+  max_order_value: 2500
+  min_order_value: 50
+  max_open_positions: 4
+  drawdown_halt_pct: 0.15   # stoppt NEUE Käufe, wenn Konto-Drawdown (nur bei Bot-Läufen gemessen) größer ist
+  allow_fractional: true    # Paper: Bruchstücke erlaubt; Live-Vorschläge immer ganze Stück
+
+paper:
+  initial_cash: 10000
+
+backtest:
+  train_fraction: 0.6       # chronologisch: erste 60 % Training, letzte 40 % Test
+  initial_cash: 10000
+
+scheduler:
+  enabled: true
+  interval_minutes: 30      # Lauf ist idempotent: pro Symbol und Kerze max. ein Signal
+
+# LIVE_APPROVAL bleibt gesperrt, bis ALLES hier ausdrücklich gesetzt ist.
+live:
+  confirmed: false          # auf true setzen = "ich habe die Limits bewusst gewählt"
+  budget: null              # z.B. 5000
+  allowed_symbols: []       # z.B. [EUNL.DE]
+  max_position_value: null  # z.B. 1500
+  max_order_value: null     # z.B. 500
+
+scalable:
+  url: https://mcp.scalable.capital/mcp
+  token_dir: data/secrets
+  oauth_callback_port: 8765
+  # NUR diese Tools darf der Bot aufrufen (Namen laut Scalable-Hilfeseite, per Discovery zu prüfen):
+  readonly_tools:
+    - get_account_profile
+    - list_accessible_portfolios
+    - get_portfolio_overview
+    - get_portfolio_holdings
+    - get_portfolio_cash_breakdown
+    - list_portfolio_transactions
+  # Optional: Tool für Ordervorschau (erzeugt KEINE Order). Erst setzen, wenn per
+  # `python -m tradebot mcp-discover` Name und Schema geprüft wurden.
+  preview_tool: null
+  preview_arg_map: {}       # Zuordnung {unser_feld: ihr_parametername}; Felder: isin, side, quantity
